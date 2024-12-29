@@ -1,109 +1,156 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from keras.models import load_model
 import matplotlib.pyplot as plt
 import yfinance as yf
 from datetime import datetime
 from sklearn.preprocessing import MinMaxScaler
+from keras.models import load_model
 
-st.title("Stock Price Predictor App")
+st.title("📊 Stock Price Predictor App")
 
-# User input for stock symbol
-stock = st.text_input("Enter the Stock ID", "GOOG")
+# Initialize session state for stock data
+if "google_data" not in st.session_state:
+    st.session_state.google_data = None
 
-end = datetime.now()
-start = datetime(end.year-20, end.month, end.day)
+# Sidebar navigation
+st.sidebar.title("Navigation")
+section = st.sidebar.radio("Go to", ["Stock Selection", "Data Visualization", "Prediction"])
 
-# Download the stock data
-google_data = yf.download(stock, start=start, end=end)
+# Stock Selection Section
+if section == "Stock Selection":
+    st.header("📈 Stock Selection")
+    stock = st.text_input("Enter the Stock ID", "GOOG")
+    end = datetime.now()
+    start = datetime(end.year - 20, end.month, end.day)
 
-# Load the pre-trained model
-model = load_model("Latest_stock_price_model.keras")
+    if st.button("Load Data"):
+        with st.spinner("Downloading stock data..."):
+            st.session_state.google_data = yf.download(stock, start=start, end=end)
+        if not st.session_state.google_data.empty:
+            st.success("Stock data loaded successfully!")
+        else:
+            st.error("Failed to load stock data. Please check the stock symbol.")
 
-# Display stock data
-st.subheader("Stock Data")
-st.write(google_data)
+    if st.session_state.google_data is not None:
+        st.subheader("Stock Data")
+        st.write(st.session_state.google_data)
 
-# Splitting the data into training and test sets (70% for training and 30% for testing)
-splitting_len = int(len(google_data) * 0.7)
-x_test = google_data['Close'][splitting_len:]
+# Data Visualization Section
+elif section == "Data Visualization":
+    if st.session_state.google_data is None or st.session_state.google_data.empty:
+        st.warning("Please load stock data in the 'Stock Selection' section first!")
+    else:
+        st.header("📈 Data Visualization")
+        st.markdown("Explore the stock price trends and moving averages.")
+        google_data = st.session_state.google_data.copy()  # Create a copy to avoid modifying original data
 
-# Function to plot graphs
-def plot_graph(figsize, values, full_data, extra_data=0, extra_dataset=None):
-    fig = plt.figure(figsize=figsize)
-    plt.plot(values, 'orange', label='Moving Average')
-    plt.plot(full_data['Close'], 'b', label='Close Price')
-    if extra_data and extra_dataset is not None:
-        plt.plot(extra_dataset, 'g', label='Additional MA')
-    plt.legend()
-    return fig
+        # Calculate moving averages
+        google_data['MA100'] = google_data['Close'].rolling(window=100, min_periods=1).mean()
+        google_data['MA200'] = google_data['Close'].rolling(window=200, min_periods=1).mean()
+        google_data['MA250'] = google_data['Close'].rolling(window=250, min_periods=1).mean()
 
-# Plotting the moving averages for different time windows
-st.subheader('Original Close Price and MA for 250 days')
-google_data['MA_for_250_days'] = google_data['Close'].rolling(250).mean()
-st.pyplot(plot_graph((15,6), google_data['MA_for_250_days'], google_data))
+        # Visualization options
+        st.subheader("Moving Averages")
+        selected_ma = st.multiselect(
+            "Select Moving Averages to Display",
+            ["100 days", "200 days", "250 days"],
+            default=["100 days", "200 days"],
+        )
 
-st.subheader('Original Close Price and MA for 200 days')
-google_data['MA_for_200_days'] = google_data['Close'].rolling(200).mean()
-st.pyplot(plot_graph((15,6), google_data['MA_for_200_days'], google_data))
+        # Create the plot
+        fig, ax = plt.subplots(figsize=(15, 6))
+        
+        # Plot closing price
+        ax.plot(google_data.index, google_data['Close'], 
+                label='Close Price', 
+                color='blue', 
+                linewidth=2)
+        
+        # Plot selected moving averages
+        ma_colors = {'100 days': 'orange', '200 days': 'green', '250 days': 'red'}
+        ma_columns = {'100 days': 'MA100', '200 days': 'MA200', '250 days': 'MA250'}
+        
+        for ma in selected_ma:
+            ax.plot(google_data.index, 
+                   google_data[ma_columns[ma]], 
+                   label=f'{ma} MA',
+                   color=ma_colors[ma],
+                   linewidth=1.5)
 
-st.subheader('Original Close Price and MA for 100 days')
-google_data['MA_for_100_days'] = google_data['Close'].rolling(100).mean()
-st.pyplot(plot_graph((15,6), google_data['MA_for_100_days'], google_data))
+        # Customize the plot
+        ax.set_title("Stock Prices and Moving Averages", fontsize=12, pad=20)
+        ax.set_xlabel("Date", fontsize=10)
+        ax.set_ylabel("Price", fontsize=10)
+        ax.legend(loc='upper left')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        
+        # Rotate x-axis labels for better readability
+        plt.xticks(rotation=45)
+        
+        # Adjust layout to prevent label cutoff
+        plt.tight_layout()
 
-st.subheader('Original Close Price and MA for 100 days and MA for 250 days')
-st.pyplot(plot_graph((15,6), google_data['MA_for_100_days'], google_data, 1, google_data['MA_for_250_days']))
+        # Display the plot
+        st.pyplot(fig)
 
-# Scaling the data
-scaler = MinMaxScaler(feature_range=(0, 1))
-scaled_data = scaler.fit_transform(google_data['Close'].values.reshape(-1, 1))
+        # Display moving averages data
+        if st.checkbox("Show Moving Averages Data"):
+            ma_data = google_data[['Close'] + list(ma_columns.values())].tail(10)
+            st.dataframe(ma_data.style.format("{:.2f}"))
 
-# Prepare the data for prediction
-x_data = []
-y_data = []
+# Prediction Section
+elif section == "Prediction":
+    if st.session_state.google_data is None or st.session_state.google_data.empty:
+        st.warning("Please load stock data in the 'Stock Selection' section first!")
+    else:
+        st.header("📈 Stock Price Prediction")
+        google_data = st.session_state.google_data
 
-for i in range(100, len(scaled_data)):
-    x_data.append(scaled_data[i-100:i])
-    y_data.append(scaled_data[i])
+        # Load the pre-trained model
+        model = load_model("Latest_stock_price_model.keras")
 
-x_data, y_data = np.array(x_data), np.array(y_data)
+        # Scaling the data
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_data = scaler.fit_transform(google_data['Close'].values.reshape(-1, 1))
 
-# Make predictions
-predictions = model.predict(x_data)
+        # Prepare the data for prediction
+        x_data = []
+        y_data = []
 
-# Calculate the correct starting index for plotting
-start_idx = 100  # Because we used 100 days for prediction
-train_size = splitting_len
-total_dataset_len = len(google_data)
+        for i in range(100, len(scaled_data)):
+            x_data.append(scaled_data[i - 100:i])
+            y_data.append(scaled_data[i])
 
-# Create proper index for the plotting dataframe
-plot_index = google_data.index[start_idx:]
+        x_data, y_data = np.array(x_data), np.array(y_data)
 
-# Inverse scaling
-predictions = scaler.inverse_transform(predictions)
-y_data = scaler.inverse_transform(y_data)
+        # Make predictions
+        predictions = model.predict(x_data)
 
-# Create DataFrame with aligned indices
-plotting_data = pd.DataFrame(
-    {
-        'original_test_data': y_data.reshape(-1),
-        'predictions': predictions.reshape(-1)
-    },
-    index=plot_index
-)
+        # Inverse scaling
+        predictions = scaler.inverse_transform(predictions)
+        y_data = scaler.inverse_transform(y_data)
 
-# Display the dataframe with original vs predicted data
-st.subheader("Original values vs Predicted values")
-st.write(plotting_data)
+        # Create DataFrame with aligned indices
+        start_idx = 100  # Because we used 100 days for prediction
+        plot_index = google_data.index[start_idx:]
+        plotting_data = pd.DataFrame(
+            {
+                'original_test_data': y_data.reshape(-1),
+                'predictions': predictions.reshape(-1)
+            },
+            index=plot_index
+        )
 
-# Plotting the original vs predicted close prices
-st.subheader('Original Close Price vs Predicted Close Price')
-fig = plt.figure(figsize=(15,6))
+        # Display the dataframe with original vs predicted data
+        st.subheader("Original values vs Predicted values")
+        st.write(plotting_data)
 
-# Plot the entire original data
-plt.plot(google_data.index[:start_idx], google_data['Close'][:start_idx], 'b', label='Training Data')
-plt.plot(plotting_data.index, plotting_data['original_test_data'], 'g', label='Original Test Data')
-plt.plot(plotting_data.index, plotting_data['predictions'], 'r', label='Predicted Values')
-plt.legend()
-st.pyplot(fig)
+        # Plotting the original vs predicted close prices
+        st.subheader("Original Close Price vs Predicted Close Price")
+        fig = plt.figure(figsize=(15, 6))
+        plt.plot(google_data.index[:start_idx], google_data['Close'][:start_idx], 'b', label='Training Data')
+        plt.plot(plotting_data.index, plotting_data['original_test_data'], 'g', label='Original Test Data')
+        plt.plot(plotting_data.index, plotting_data['predictions'], 'r', label='Predicted Values')
+        plt.legend()
+        st.pyplot(fig)
